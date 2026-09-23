@@ -6,7 +6,8 @@
 //
 //	ACCEPTANCE_STAGE=1|2    1 — после change 1 (серии), 2 — после change 2 (буфер). По умолчанию 1.
 //	ACCEPTANCE_RACE=0       собрать без -race (по умолчанию с ним; нужен cgo).
-//	ACCEPTANCE_BASE_URL=... не собирать и не запускать, бить в уже поднятый сервис.
+//	ACCEPTANCE_BASE_URL=... не собирать и не запускать, бить в уже поднятый сервис
+//	                        (judge.sh по умолчанию ставит http://localhost:8080).
 package acceptance
 
 import (
@@ -21,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -56,9 +58,19 @@ func TestMain(m *testing.M) {
 	}
 	if u := os.Getenv("ACCEPTANCE_BASE_URL"); u != "" {
 		baseURL = strings.TrimSuffix(u, "/")
-		os.Exit(m.Run())
+		os.Exit(runAgainstExternal(m))
 	}
 	os.Exit(runWithServer(m))
+}
+
+func runAgainstExternal(m *testing.M) int {
+	if err := waitReady(3 * time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "service not ready: %v — подними сервис из проверяемой рабочей копии (make run)\n", err)
+		return 1
+	}
+	code := m.Run()
+	fmt.Println("race detector: не проверялся — сервис запущен снаружи")
+	return code
 }
 
 func runWithServer(m *testing.M) int {
@@ -102,7 +114,7 @@ func runWithServer(m *testing.M) int {
 	}()
 
 	baseURL = "http://127.0.0.1:" + port
-	if err := waitReady(); err != nil {
+	if err := waitReady(15 * time.Second); err != nil {
 		fmt.Fprintf(os.Stderr, "service not ready: %v\nstderr:\n%s", err, stderr.String())
 		return 1
 	}
@@ -129,8 +141,8 @@ func freePort() (string, error) {
 	return port, err
 }
 
-func waitReady() error {
-	deadline := time.Now().Add(15 * time.Second)
+func waitReady(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(baseURL + "/bookings?room=ping&date=2026-01-01")
 		if err == nil {
@@ -179,9 +191,13 @@ func post(t *testing.T, path string, body any) response {
 	return response{status: resp.StatusCode, body: data}
 }
 
-// room — уникальная комната на тест: сервис один на весь прогон.
+// runID отделяет комнаты разных прогонов: внешний сервис может пережить
+// несколько запусков приёмки, а хранилище у него одно.
+var runID = strconv.FormatInt(time.Now().UnixNano(), 36)
+
+// room — уникальная комната на тест и прогон.
 func room(t *testing.T) string {
-	return strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	return strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) + "_" + runID
 }
 
 func createSingle(t *testing.T, room, start, end string) response {
