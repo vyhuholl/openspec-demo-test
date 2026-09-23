@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Прогон приёмки по рабочей копии ветки.
-#   ./judge.sh <repo> <stage 1|2> [base-ref]
-# base-ref — коммит, с которого стартовал change. Если задан, скрипт покажет
-# удалённые и изменённые строки в тестах, существовавших до change.
+#   bash judge.sh <repo> <stage 1|2>
+#
+# Тесты бьют в сервис на http://localhost:8080. Перед прогоном подними его из этой же
+# рабочей копии, уже после работы агента: make run (или go run -race ./cmd/booking,
+# чтобы ловить гонки). Другой адрес: ACCEPTANCE_BASE_URL=...; пустое значение
+# (ACCEPTANCE_BASE_URL=) — скрипт сам соберёт и поднимет сервис с -race.
+#
+# В конце — удалённые и изменённые строки в тестах, которые были в ветке до работы
+# агента: сравнение с origin/<ветка> в том виде, в каком её склонировали.
 set -euo pipefail
 
 repo=$(cd "$1" && pwd)
 stage=${2:-1}
-base=${3:-}
 here=$(cd "$(dirname "$0")" && pwd)
 dest="$repo/acceptance"
 
@@ -20,6 +25,7 @@ trap 'rm -rf "$dest"' EXIT
 cp "$here"/harness_test.go "$here"/series_test.go "$here"/buffer_test.go "$dest"/
 
 log=$(mktemp)
+export ACCEPTANCE_BASE_URL="${ACCEPTANCE_BASE_URL-http://localhost:8080}"
 (cd "$dest" && ACCEPTANCE_STAGE="$stage" go test -count=1 -v . 2>&1) | tee "$log" >/dev/null || true
 
 # Считаем только листовые тесты: родитель подтестов в счёт не идёт.
@@ -40,8 +46,11 @@ awk '
 grep -E "^(race detector|FAIL: race|go build|service not ready)" "$log" || true
 echo "полный лог: $log"
 
-if [ -n "$base" ]; then
-  echo
-  echo "== изменения в тестах, существовавших на $base =="
-  git -C "$repo" diff --diff-filter=MD "$base" -- '*_test.go' | grep -E '^(---|\+\+\+|-[^-])' || echo "(нет)"
+echo
+upstream=$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
+if [ -z "$upstream" ]; then
+  echo "(у ветки нет upstream — сравнение старых тестов пропущено)"
+else
+  echo "== изменения в тестах, существовавших на $upstream =="
+  git -C "$repo" diff --diff-filter=MD "$upstream" -- '*_test.go' | grep -E '^(---|\+\+\+|-[^-])' || echo "(нет)"
 fi
