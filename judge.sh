@@ -2,10 +2,10 @@
 # Прогон приёмки по рабочей копии ветки.
 #   bash judge.sh <repo> <stage 1|2>
 #
-# Тесты бьют в сервис на http://localhost:8080. Перед прогоном подними его из этой же
-# рабочей копии, уже после работы агента: make run (или go run -race ./cmd/booking,
-# чтобы ловить гонки). Другой адрес: ACCEPTANCE_BASE_URL=...; пустое значение
-# (ACCEPTANCE_BASE_URL=) — скрипт сам соберёт и поднимет сервис с -race.
+# Сервис поднимать не нужно: тесты сами собирают cmd/booking из этой рабочей копии
+# с -race, поднимают на свободном порту и в конце сообщают, были ли гонки.
+# Бить в уже запущенный сервис: ACCEPTANCE_BASE_URL=http://localhost:8080 bash judge.sh ...
+# (гонки тогда не проверяются).
 #
 # В конце — удалённые и изменённые строки в тестах, которые были в ветке до работы
 # агента: сравнение с origin/<ветка> в том виде, в каком её склонировали.
@@ -25,7 +25,6 @@ trap 'rm -rf "$dest"' EXIT
 cp "$here"/harness_test.go "$here"/series_test.go "$here"/buffer_test.go "$dest"/
 
 log=$(mktemp)
-export ACCEPTANCE_BASE_URL="${ACCEPTANCE_BASE_URL-http://localhost:8080}"
 (cd "$dest" && ACCEPTANCE_STAGE="$stage" go test -count=1 -v . 2>&1) | tee "$log" >/dev/null || true
 
 # Считаем только листовые тесты: родитель подтестов в счёт не идёт.
