@@ -4,10 +4,8 @@
 //
 // Переменные окружения:
 //
-//	ACCEPTANCE_STAGE=1|2    1 — после change 1 (серии), 2 — после change 2 (буфер). По умолчанию 1.
 //	ACCEPTANCE_RACE=0       собрать без -race (по умолчанию с ним; нужен cgo).
-//	ACCEPTANCE_BASE_URL=... не собирать и не запускать, бить в уже поднятый сервис
-//	                        (judge.sh по умолчанию ставит http://localhost:8080).
+//	ACCEPTANCE_BASE_URL=... не собирать и не запускать, бить в уже поднятый сервис.
 package acceptance
 
 import (
@@ -31,7 +29,6 @@ import (
 
 var (
 	baseURL string
-	stage   = 1
 	client  = &http.Client{Timeout: 30 * time.Second}
 )
 
@@ -53,9 +50,6 @@ func (b *lockedBuffer) String() string {
 }
 
 func TestMain(m *testing.M) {
-	if os.Getenv("ACCEPTANCE_STAGE") == "2" {
-		stage = 2
-	}
 	if u := os.Getenv("ACCEPTANCE_BASE_URL"); u != "" {
 		baseURL = strings.TrimSuffix(u, "/")
 		os.Exit(runAgainstExternal(m))
@@ -343,16 +337,7 @@ func ids(bs []booking) []string {
 	return out
 }
 
-// minGap — минимальный допустимый зазор между бронями одной комнаты на текущей стадии.
-func minGap() time.Duration {
-	if stage >= 2 {
-		return 10 * time.Minute
-	}
-	return 0
-}
-
-// checkNoOverlap проверяет инвариант комнаты: брони не пересекаются
-// и (на стадии 2) разнесены не меньше чем на буфер.
+// checkNoOverlap проверяет инвариант комнаты: брони не пересекаются.
 func checkNoOverlap(t *testing.T, bs []booking) {
 	t.Helper()
 	sorted := slices.Clone(bs)
@@ -362,17 +347,10 @@ func checkNoOverlap(t *testing.T, bs []booking) {
 	for i := 1; i < len(sorted); i++ {
 		prevEnd := instant(t, sorted[i-1].End)
 		curStart := instant(t, sorted[i].Start)
-		if curStart.Sub(prevEnd) < minGap() {
-			t.Fatalf("bookings %s (%s–%s) and %s (%s–%s) violate room invariant (min gap %v)",
+		if curStart.Before(prevEnd) {
+			t.Fatalf("bookings %s (%s–%s) and %s (%s–%s) overlap",
 				sorted[i-1].ID, sorted[i-1].Start, sorted[i-1].End,
-				sorted[i].ID, sorted[i].Start, sorted[i].End, minGap())
+				sorted[i].ID, sorted[i].Start, sorted[i].End)
 		}
-	}
-}
-
-func requireStage(t *testing.T, n int) {
-	t.Helper()
-	if stage < n {
-		t.Skipf("stage %d test (ACCEPTANCE_STAGE=%d)", n, stage)
 	}
 }

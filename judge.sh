@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Прогон приёмки по рабочей копии ветки.
-#   bash judge.sh <repo> <stage 1|2>
+#   bash judge.sh <repo>
 #
 # Сервис поднимать не нужно: тесты сами собирают cmd/booking из этой рабочей копии
 # с -race, поднимают на свободном порту и в конце сообщают, были ли гонки.
@@ -12,7 +12,6 @@
 set -euo pipefail
 
 repo=$(cd "$1" && pwd)
-stage=${2:-1}
 here=$(cd "$(dirname "$0")" && pwd)
 dest="$repo/acceptance"
 
@@ -22,10 +21,10 @@ if [ -e "$dest" ]; then
 fi
 mkdir "$dest"
 trap 'rm -rf "$dest"' EXIT
-cp "$here"/harness_test.go "$here"/series_test.go "$here"/buffer_test.go "$dest"/
+cp "$here"/*_test.go "$dest"/
 
 log=$(mktemp)
-(cd "$dest" && ACCEPTANCE_STAGE="$stage" go test -count=1 -v . 2>&1) | tee "$log" >/dev/null || true
+(cd "$dest" && go test -count=1 -v . 2>&1) | tee "$log" >/dev/null || true
 
 # Считаем только листовые тесты: родитель подтестов в счёт не идёт.
 awk '

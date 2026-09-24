@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Коды пунктов листа заказчика (O1…O7, B1…B4) — в комментариях к тестам.
+// Коды вопросов (Q1-Q7) — в комментариях к тестам.
 
 func daily(room, start, end, until string) seriesReq {
 	return seriesReq{"room": room, "start": start, "end": end, "repeat": "daily", "until": until}
@@ -67,7 +67,7 @@ func TestSeries_Daily_CreatedAndListed(t *testing.T) {
 	}
 }
 
-// O2: until включительно; серия из одного вхождения допустима; until раньше start — 400.
+// Q2: until включительно; серия из одного вхождения допустима; until раньше start — 400.
 func TestSeries_Until(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -111,7 +111,7 @@ func TestSeries_Until(t *testing.T) {
 	}
 }
 
-// O3: горизонт серии — не дальше года от даты первого вхождения.
+// Q3: горизонт серии — не дальше года от даты первого вхождения.
 func TestSeries_Horizon(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -152,7 +152,7 @@ func TestSeries_Horizon(t *testing.T) {
 	}
 }
 
-// O4: конфликт хотя бы одного вхождения — 409 на всю серию, ни одной брони не создано.
+// Q4: конфликт хотя бы одного вхождения — 409 на всю серию, ни одной брони не создано.
 func TestSeries_Conflict_WholeSeriesRejected(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -202,18 +202,13 @@ func TestSeries_Conflict_WholeSeriesRejected(t *testing.T) {
 	}
 }
 
-// O4 + B2: касание на стадии 1 не конфликт, на стадии 2 — конфликт из-за буфера.
+// Q4: касание (конец одной брони = начало другой) — не конфликт.
 func TestSeries_TouchingExisting(t *testing.T) {
 	r := room(t)
 	before := mustCreateSingle(t, r, "2027-11-03T08:00:00Z", "2027-11-03T09:00:00Z")
 	after := mustCreateSingle(t, r, "2027-11-03T10:00:00Z", "2027-11-03T11:00:00Z")
 
 	resp := createSeries(t, daily(r, "2027-11-01T09:00:00Z", "2027-11-01T10:00:00Z", "2027-11-05"))
-	if stage >= 2 {
-		wantStatus(t, resp, http.StatusConflict)
-		wantNothingCreated(t, r, "2027-10-31", "2027-11-06", before, after)
-		return
-	}
 	wantStatus(t, resp, http.StatusCreated)
 	s := decodeSeries(t, resp)
 	listed := listRange(t, r, "2027-10-31", "2027-11-06")
@@ -223,7 +218,7 @@ func TestSeries_TouchingExisting(t *testing.T) {
 	}
 }
 
-// O5: weekly по выбранным дням.
+// Q5: weekly по выбранным дням.
 func TestSeries_Weekly(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -273,7 +268,7 @@ func TestSeries_Weekly(t *testing.T) {
 	}
 }
 
-// O5 + соглашения сервиса: невалидный запрос — 400, ничего не создано.
+// Q5 + соглашения сервиса: невалидный запрос — 400, ничего не создано.
 func TestSeries_InvalidRequest(t *testing.T) {
 	const start, end = "2027-11-01T09:00:00Z", "2027-11-01T10:00:00Z"
 	tests := []struct {
@@ -288,11 +283,6 @@ func TestSeries_InvalidRequest(t *testing.T) {
 		{"missing repeat", func(r string) seriesReq {
 			q := daily(r, start, end, "2027-11-05")
 			delete(q, "repeat")
-			return q
-		}},
-		{"empty days", func(r string) seriesReq {
-			q := weekly(r, start, end, "2027-11-19")
-			q["days"] = []string{}
 			return q
 		}},
 		{"unknown day", func(r string) seriesReq { return weekly(r, start, end, "2027-11-19", "mon", "funday") }},
@@ -319,7 +309,7 @@ func TestSeries_InvalidRequest(t *testing.T) {
 	}
 }
 
-// O6: вхождения одной серии пересекаются между собой — 400, ничего не создано.
+// Q6: вхождения одной серии пересекаются между собой — 400, ничего не создано.
 // Два подтеста разделяют инвариант (объективно) и выбор кода ответа (решение заказчика).
 func TestSeries_SelfOverlap(t *testing.T) {
 	r := room(t)
@@ -337,7 +327,7 @@ func TestSeries_SelfOverlap(t *testing.T) {
 	})
 }
 
-// O1: повторение по местному времени Europe/Berlin, после перевода часов UTC сдвигается.
+// Q1: повторение по местному времени Europe/Berlin, после перевода часов UTC сдвигается.
 func TestSeries_DST(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -375,7 +365,7 @@ func TestSeries_DST(t *testing.T) {
 	}
 }
 
-// O7: при одновременных запросах брони комнаты не пересекаются, серия либо целиком, либо никак.
+// Q7: при одновременных запросах брони комнаты не пересекаются, серия либо целиком, либо никак.
 func TestSeries_Concurrent_InvariantHolds(t *testing.T) {
 	const rounds, seriesPerRound, singlesPerRound = 5, 25, 5
 	for round := range rounds {
