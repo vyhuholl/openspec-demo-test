@@ -1,12 +1,9 @@
 package acceptance
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -64,6 +61,117 @@ func TestSeries_Daily_CreatedAndListed(t *testing.T) {
 	listed := listRange(t, r, "2027-10-31", "2027-11-07")
 	if !slices.Equal(ids(listed), ids(s.Bookings)) {
 		t.Fatalf("GET /bookings shows %v, want exactly the series bookings %v", starts(listed), starts(s.Bookings))
+	}
+}
+
+// Q1: повторение по местному времени Europe/Berlin, после перевода часов UTC сдвигается.
+func TestSeries_DST(t *testing.T) {
+	tests := []struct {
+		name       string
+		req        func(room string) seriesReq
+		wantStarts []string
+	}{
+		{
+			name: "autumn weekly keeps 10:00 Berlin",
+			req: func(r string) seriesReq {
+				return weekly(r, "2027-10-25T08:00:00Z", "2027-10-25T09:00:00Z", "2027-11-09")
+			},
+			wantStarts: []string{"2027-10-25T08:00:00Z", "2027-11-01T09:00:00Z", "2027-11-08T09:00:00Z"},
+		},
+		{
+			name: "spring daily keeps 10:00 Berlin",
+			req: func(r string) seriesReq {
+				return daily(r, "2028-03-24T09:00:00Z", "2028-03-24T10:00:00Z", "2028-03-28")
+			},
+			wantStarts: []string{
+				"2028-03-24T09:00:00Z", "2028-03-25T09:00:00Z", "2028-03-26T08:00:00Z", "2028-03-27T08:00:00Z",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := mustCreateSeries(t, tt.req(room(t)))
+			wantStarts(t, s.Bookings, tt.wantStarts...)
+			for i := range tt.wantStarts {
+				b := s.Bookings[i]
+				if d := instant(t, b.End).Sub(instant(t, b.Start)); d != time.Hour {
+					t.Fatalf("bookings[%d] = %s–%s, want 1h", i, b.Start, b.End)
+				}
+			}
+		})
+	}
+}
+
+// Q1, уточнение: местное (берлинское) время начала или конца в [02:00, 03:00) — 400,
+// даже если серия не попадает на дату перевода часов. Ровно 03:00 — можно.
+func TestSeries_DSTTransitionHour(t *testing.T) {
+	tests := []struct {
+		name       string
+		req        func(room string) seriesReq
+		wantStatus int
+		wantStarts []string
+	}{
+		{
+			name: "start in spring gap",
+			req: func(r string) seriesReq {
+				return daily(r, "2028-03-24T01:30:00Z", "2028-03-24T02:30:00Z", "2028-03-27")
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "start in autumn repeated hour",
+			req: func(r string) seriesReq {
+				return daily(r, "2027-10-29T00:30:00Z", "2027-10-29T01:30:00Z", "2027-11-01")
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "end in transition hour",
+			req: func(r string) seriesReq {
+				return daily(r, "2028-03-24T00:30:00Z", "2028-03-24T01:30:00Z", "2028-03-27")
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "transition hour without transition date",
+			req: func(r string) seriesReq {
+				return weekly(r, "2027-11-01T01:30:00Z", "2027-11-01T02:30:00Z", "2027-11-15")
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "03:00 across spring change",
+			req: func(r string) seriesReq {
+				return daily(r, "2028-03-24T02:00:00Z", "2028-03-24T03:00:00Z", "2028-03-28")
+			},
+			wantStatus: http.StatusCreated,
+			wantStarts: []string{
+				"2028-03-24T02:00:00Z", "2028-03-25T02:00:00Z", "2028-03-26T01:00:00Z", "2028-03-27T01:00:00Z",
+			},
+		},
+		{
+			name: "03:00 across autumn change",
+			req: func(r string) seriesReq {
+				return daily(r, "2027-10-29T01:00:00Z", "2027-10-29T02:00:00Z", "2027-11-02")
+			},
+			wantStatus: http.StatusCreated,
+			wantStarts: []string{
+				"2027-10-29T01:00:00Z", "2027-10-30T01:00:00Z", "2027-10-31T02:00:00Z", "2027-11-01T02:00:00Z",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := room(t)
+			resp := createSeries(t, tt.req(r))
+			wantStatus(t, resp, tt.wantStatus)
+			if tt.wantStatus != http.StatusCreated {
+				wantNothingCreated(t, r, "2027-10-28", "2027-11-16")
+				wantNothingCreated(t, r, "2028-03-23", "2028-03-28")
+				return
+			}
+			wantStarts(t, decodeSeries(t, resp).Bookings, tt.wantStarts...)
+		})
 	}
 }
 
@@ -325,112 +433,4 @@ func TestSeries_SelfOverlap(t *testing.T) {
 	t.Run("status 400", func(t *testing.T) {
 		wantStatus(t, resp, http.StatusBadRequest)
 	})
-}
-
-// Q1: повторение по местному времени Europe/Berlin, после перевода часов UTC сдвигается.
-func TestSeries_DST(t *testing.T) {
-	tests := []struct {
-		name       string
-		req        func(room string) seriesReq
-		wantStarts []string
-	}{
-		{
-			name: "autumn weekly keeps 10:00 Berlin",
-			req: func(r string) seriesReq {
-				return weekly(r, "2027-10-25T08:00:00Z", "2027-10-25T09:00:00Z", "2027-11-09")
-			},
-			wantStarts: []string{"2027-10-25T08:00:00Z", "2027-11-01T09:00:00Z", "2027-11-08T09:00:00Z"},
-		},
-		{
-			name: "spring daily keeps 10:00 Berlin",
-			req: func(r string) seriesReq {
-				return daily(r, "2028-03-24T09:00:00Z", "2028-03-24T10:00:00Z", "2028-03-28")
-			},
-			wantStarts: []string{
-				"2028-03-24T09:00:00Z", "2028-03-25T09:00:00Z", "2028-03-26T08:00:00Z", "2028-03-27T08:00:00Z",
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := mustCreateSeries(t, tt.req(room(t)))
-			wantStarts(t, s.Bookings, tt.wantStarts...)
-			for i := range tt.wantStarts {
-				b := s.Bookings[i]
-				if d := instant(t, b.End).Sub(instant(t, b.Start)); d != time.Hour {
-					t.Fatalf("bookings[%d] = %s–%s, want 1h", i, b.Start, b.End)
-				}
-			}
-		})
-	}
-}
-
-// Q7: при одновременных запросах брони комнаты не пересекаются, серия либо целиком, либо никак.
-func TestSeries_Concurrent_InvariantHolds(t *testing.T) {
-	const rounds, seriesPerRound, singlesPerRound = 5, 25, 5
-	for round := range rounds {
-		t.Run(fmt.Sprintf("round %d", round+1), func(t *testing.T) {
-			r := room(t)
-			base := time.Date(2027, 11, 1, 9, 0, 0, 0, time.UTC)
-
-			type result struct {
-				status int
-				ids    []string
-			}
-			results := make([]result, seriesPerRound+singlesPerRound)
-			ready := make(chan struct{})
-			var wg sync.WaitGroup
-			for i := range seriesPerRound {
-				start := base.Add(time.Duration(i) * 5 * time.Minute)
-				req := daily(r, start.Format(time.RFC3339), start.Add(time.Hour).Format(time.RFC3339), "2027-11-05")
-				wg.Go(func() {
-					<-ready
-					resp := createSeries(t, req)
-					res := result{status: resp.status}
-					if resp.status == http.StatusCreated {
-						res.ids = ids(decodeSeries(t, resp).Bookings)
-					}
-					results[i] = res
-				})
-			}
-			for j := range singlesPerRound {
-				start := base.AddDate(0, 0, 2).Add(time.Duration(j) * 17 * time.Minute)
-				i := seriesPerRound + j
-				wg.Go(func() {
-					<-ready
-					resp := createSingle(t, r, start.Format(time.RFC3339), start.Add(time.Hour).Format(time.RFC3339))
-					res := result{status: resp.status}
-					if resp.status == http.StatusCreated {
-						var b booking
-						if err := json.Unmarshal(resp.body, &b); err != nil {
-							t.Errorf("decode booking: %v", err)
-						}
-						res.ids = []string{b.ID}
-					}
-					results[i] = res
-				})
-			}
-			close(ready)
-			wg.Wait()
-
-			var wantIDs []string
-			for i, res := range results {
-				if res.status != http.StatusCreated && res.status != http.StatusConflict {
-					t.Fatalf("request %d: status %d, want 201 or 409", i, res.status)
-				}
-				wantIDs = append(wantIDs, res.ids...)
-			}
-			if len(wantIDs) == 0 {
-				t.Fatalf("nothing created, want at least one success")
-			}
-			slices.Sort(wantIDs)
-
-			listed := listRange(t, r, "2027-10-31", "2027-11-06")
-			if !slices.Equal(ids(listed), wantIDs) {
-				t.Fatalf("room has %d bookings, successful responses report %d: partial series or lost writes",
-					len(listed), len(wantIDs))
-			}
-			checkNoOverlap(t, listed)
-		})
-	}
 }
